@@ -66,6 +66,17 @@ class ProjectResponseSchema(BaseModel):
 
     model_config = {"from_attributes": True}
 
+class TaskResponseSchema(BaseModel):
+    """What the API returns when asked about a task."""
+    id: int
+    title: str
+    description: Optional[str]
+    assigned_to: Optional[str]
+    priority: str
+    is_completed: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 if __name__ == "__main__":
     print("=== Test 1: Valid user ===")
