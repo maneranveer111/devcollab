@@ -16,7 +16,6 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Temporary in-memory storage (we replace this with a real DB in Week 4)
 users_db: dict = {}
 projects_db: dict = {}
 tasks_db: dict = {}
