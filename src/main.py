@@ -2,7 +2,9 @@ from fastapi import FastAPI, HTTPException, status, Depends
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
+from fastapi.security import OAuth2PasswordRequestForm
 
+from src.auth import hash_password, verify_password, create_access_token, get_current_user
 from src.config.database import get_db
 from src.db_models import User, Project, Task, UserRoleEnum
 from src.schemas import (
@@ -30,11 +32,11 @@ def health_check():
     }
 
 
-# ─── User endpoints ───────────────────────────────────────────────────────────
+# ─── Auth endpoints ───────────────────────────────────────────────────────────
 
-@app.post("/api/v1/users", status_code=status.HTTP_201_CREATED)
-def create_user(user: UserCreateSchema, db: Session = Depends(get_db)):
-    # Check if username already exists
+@app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
+def register(user: UserCreateSchema, db: Session = Depends(get_db)):
+    # Check if username exists
     existing = db.query(User).filter(User.username == user.username).first()
     if existing:
         raise HTTPException(
@@ -42,7 +44,7 @@ def create_user(user: UserCreateSchema, db: Session = Depends(get_db)):
             detail=f"Username '{user.username}' already exists"
         )
 
-    # Check if email already exists
+    # Check if email exists
     existing_email = db.query(User).filter(User.email == user.email).first()
     if existing_email:
         raise HTTPException(
@@ -50,12 +52,12 @@ def create_user(user: UserCreateSchema, db: Session = Depends(get_db)):
             detail=f"Email '{user.email}' already exists"
         )
 
-    # Create the user
+    # Create user with HASHED password
     db_user = User(
         username=user.username,
         email=user.email,
         full_name=user.full_name,
-        password_hash=user.password,
+        password_hash=hash_password(user.password),
         role=UserRoleEnum.MEMBER
     )
     db.add(db_user)
@@ -63,7 +65,7 @@ def create_user(user: UserCreateSchema, db: Session = Depends(get_db)):
     db.refresh(db_user)
 
     return {
-        "message": "User created successfully",
+        "message": "User registered successfully",
         "data": {
             "id": db_user.id,
             "username": db_user.username,
@@ -76,8 +78,46 @@ def create_user(user: UserCreateSchema, db: Session = Depends(get_db)):
     }
 
 
+@app.post("/api/v1/auth/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # Find user
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+
+    # Verify password
+    if not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+
+    # Check if active
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is deactivated"
+        )
+
+    # Create token
+    access_token = create_access_token(data={"sub": user.username})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+
+# ─── User endpoints (PROTECTED) ──────────────────────────────────────────────
+
 @app.get("/api/v1/users")
-def get_all_users(db: Session = Depends(get_db)):
+def get_all_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     users = db.query(User).filter(User.is_active == True).all()
     return {
         "message": "Users retrieved successfully",
@@ -98,7 +138,11 @@ def get_all_users(db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/users/{username}")
-def get_user(username: str, db: Session = Depends(get_db)):
+def get_user(
+    username: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     db_user = db.query(User).filter(User.username == username).first()
     if not db_user:
         raise HTTPException(
@@ -120,7 +164,11 @@ def get_user(username: str, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/v1/users/{username}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_user(username: str, db: Session = Depends(get_db)):
+def delete_user(
+    username: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     db_user = db.query(User).filter(User.username == username).first()
     if not db_user:
         raise HTTPException(
@@ -132,15 +180,19 @@ def delete_user(username: str, db: Session = Depends(get_db)):
     return None
 
 
-# ─── Project endpoints ────────────────────────────────────────────────────────
+# ─── Project endpoints (PROTECTED) ───────────────────────────────────────────
 
 @app.post("/api/v1/projects", status_code=status.HTTP_201_CREATED)
-def create_project(project: ProjectCreateSchema, db: Session = Depends(get_db)):
+def create_project(
+    project: ProjectCreateSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     db_project = Project(
         name=project.name,
         description=project.description,
         max_members=project.max_members,
-        owner_id=1
+        owner_id=current_user.id
     )
     db.add(db_project)
     db.commit()
@@ -160,7 +212,10 @@ def create_project(project: ProjectCreateSchema, db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/projects")
-def get_all_projects(db: Session = Depends(get_db)):
+def get_all_projects(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     projects = db.query(Project).filter(Project.is_active == True).all()
     return {
         "message": "Projects retrieved successfully",
@@ -181,7 +236,11 @@ def get_all_projects(db: Session = Depends(get_db)):
 
 
 @app.get("/api/v1/projects/{project_id}")
-def get_project(project_id: int, db: Session = Depends(get_db)):
+def get_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     db_project = db.query(Project).filter(Project.id == project_id).first()
     if not db_project:
         raise HTTPException(
@@ -202,11 +261,15 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
     }
 
 
-# ─── Task endpoints ───────────────────────────────────────────────────────────
+# ─── Task endpoints (PROTECTED) ──────────────────────────────────────────────
 
 @app.post("/api/v1/projects/{project_id}/tasks", status_code=status.HTTP_201_CREATED)
-def create_task(project_id: int, task: TaskCreateSchema, db: Session = Depends(get_db)):
-    # Verify project exists
+def create_task(
+    project_id: int,
+    task: TaskCreateSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     db_project = db.query(Project).filter(Project.id == project_id).first()
     if not db_project:
         raise HTTPException(
@@ -241,7 +304,11 @@ def create_task(project_id: int, task: TaskCreateSchema, db: Session = Depends(g
 
 
 @app.get("/api/v1/projects/{project_id}/tasks")
-def get_project_tasks(project_id: int, db: Session = Depends(get_db)):
+def get_project_tasks(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     db_project = db.query(Project).filter(Project.id == project_id).first()
     if not db_project:
         raise HTTPException(
