@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
@@ -12,12 +12,13 @@ from src.schemas import (
     ProjectCreateSchema,
     TaskCreateSchema,
 )
-
-from src.cache import(
+from src.cache import (
     get_cached_data,
     set_cached_data,
     invalidate_cache,
     check_redis_connection,
+    check_rate_limit,
+    rate_limit_login,
     USERS_CACHE_KEY,
     PROJECTS_CACHE_KEY
 )
@@ -62,7 +63,7 @@ def register(user: UserCreateSchema, db: Session = Depends(get_db)):
             detail=f"Email '{user.email}' already exists"
         )
 
-    # Create user with HASHED password
+    # Create user with hashed password
     db_user = User(
         username=user.username,
         email=user.email,
@@ -74,6 +75,7 @@ def register(user: UserCreateSchema, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
 
+    # Invalidate users cache — new user means cached list is stale
     invalidate_cache(USERS_CACHE_KEY)
 
     return {
@@ -91,7 +93,12 @@ def register(user: UserCreateSchema, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/auth/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db),
+    _=Depends(rate_limit_login)
+):
     # Find user
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user:
@@ -127,16 +134,25 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 
 @app.get("/api/v1/users")
 def get_all_users(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    
+    # Rate limit — 100 requests per minute per user
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
+    # Check cache first
     cached = get_cached_data(USERS_CACHE_KEY)
     if cached:
         return cached
 
+    # Cache miss — query database
     users = db.query(User).filter(User.is_active == True).all()
-    responce = {
+    response = {
         "message": "Users retrieved successfully",
         "data": [
             {
@@ -153,16 +169,26 @@ def get_all_users(
         "count": len(users)
     }
 
-    set_cached_data(USERS_CACHE_KEY, responce)
+    # Store in cache
+    set_cached_data(USERS_CACHE_KEY, response)
 
-    return responce
+    return response
+
 
 @app.get("/api/v1/users/{username}")
 def get_user(
     username: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
     db_user = db.query(User).filter(User.username == username).first()
     if not db_user:
         raise HTTPException(
@@ -186,9 +212,17 @@ def get_user(
 @app.delete("/api/v1/users/{username}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     username: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
     db_user = db.query(User).filter(User.username == username).first()
     if not db_user:
         raise HTTPException(
@@ -198,7 +232,9 @@ def delete_user(
     db_user.is_active = False
     db.commit()
 
+    # Invalidate cache — user list changed
     invalidate_cache(USERS_CACHE_KEY)
+
     return None
 
 
@@ -207,9 +243,17 @@ def delete_user(
 @app.post("/api/v1/projects", status_code=status.HTTP_201_CREATED)
 def create_project(
     project: ProjectCreateSchema,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
     db_project = Project(
         name=project.name,
         description=project.description,
@@ -220,6 +264,7 @@ def create_project(
     db.commit()
     db.refresh(db_project)
 
+    # Invalidate projects cache — new project added
     invalidate_cache(PROJECTS_CACHE_KEY)
 
     return {
@@ -238,14 +283,23 @@ def create_project(
 
 @app.get("/api/v1/projects")
 def get_all_projects(
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
+    # Check cache first
     cached = get_cached_data(PROJECTS_CACHE_KEY)
     if cached:
         return cached
 
+    # Cache miss — query database
     projects = db.query(Project).filter(Project.is_active == True).all()
     response = {
         "message": "Projects retrieved successfully",
@@ -264,15 +318,26 @@ def get_all_projects(
         "count": len(projects)
     }
 
+    # Store in cache
     set_cached_data(PROJECTS_CACHE_KEY, response)
+
     return response
+
 
 @app.get("/api/v1/projects/{project_id}")
 def get_project(
     project_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
     db_project = db.query(Project).filter(Project.id == project_id).first()
     if not db_project:
         raise HTTPException(
@@ -299,9 +364,17 @@ def get_project(
 def create_task(
     project_id: int,
     task: TaskCreateSchema,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
     db_project = db.query(Project).filter(Project.id == project_id).first()
     if not db_project:
         raise HTTPException(
@@ -338,9 +411,17 @@ def create_task(
 @app.get("/api/v1/projects/{project_id}/tasks")
 def get_project_tasks(
     project_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Please wait before making more requests."
+        )
+
     db_project = db.query(Project).filter(Project.id == project_id).first()
     if not db_project:
         raise HTTPException(
