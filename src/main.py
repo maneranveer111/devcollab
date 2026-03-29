@@ -1,8 +1,13 @@
 from fastapi import FastAPI, HTTPException, status, Depends, Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
-from fastapi.security import OAuth2PasswordRequestForm
+import time
+import logging
+import math
 
 from src.auth import hash_password, verify_password, create_access_token, get_current_user
 from src.config.database import get_db
@@ -22,6 +27,18 @@ from src.cache import (
     USERS_CACHE_KEY,
     PROJECTS_CACHE_KEY
 )
+from fastapi.security import OAuth2PasswordRequestForm
+
+# ─── Logging setup ────────────────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
+
+# ─── App setup ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="DevCollab API",
@@ -29,6 +46,96 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# ─── CORS middleware ──────────────────────────────────────────────────────────
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─── Request logging middleware ───────────────────────────────────────────────
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    duration = round((time.time() - start_time) * 1000, 2)
+    logger.info(
+        f"{request.method} {request.url.path} "
+        f"→ {response.status_code} ({duration}ms)"
+    )
+    return response
+
+# ─── Error code helper ────────────────────────────────────────────────────────
+
+def get_error_code(status_code: int) -> str:
+    codes = {
+        400: "bad_request",
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        409: "conflict",
+        422: "validation_error",
+        429: "rate_limit_exceeded",
+        500: "internal_server_error"
+    }
+    return codes.get(status_code, "error")
+
+# ─── Exception handlers ───────────────────────────────────────────────────────
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": get_error_code(exc.status_code),
+            "message": exc.detail,
+            "status_code": exc.status_code
+        }
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "validation_error",
+            "message": "Request validation failed",
+            "status_code": 422,
+            "details": exc.errors()
+        }
+    )
+
+# ─── Pagination helper ────────────────────────────────────────────────────────
+
+def paginate(query, page: int, limit: int):
+    """
+    Apply pagination to a SQLAlchemy query.
+    Returns (items, pagination_metadata)
+    """
+    # Clamp values — prevent negative pages or zero limits
+    page = max(1, page)
+    limit = max(1, min(100, limit))  # max 100 items per page
+
+    total = query.count()
+    total_pages = math.ceil(total / limit) if total > 0 else 1
+    offset = (page - 1) * limit
+
+    items = query.offset(offset).limit(limit).all()
+
+    pagination = {
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1
+    }
+
+    return items, pagination
 
 # ─── Health check ─────────────────────────────────────────────────────────────
 
@@ -42,12 +149,10 @@ def health_check():
         "redis": "connected" if check_redis_connection() else "disconnected"
     }
 
-
 # ─── Auth endpoints ───────────────────────────────────────────────────────────
 
 @app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
 def register(user: UserCreateSchema, db: Session = Depends(get_db)):
-    # Check if username exists
     existing = db.query(User).filter(User.username == user.username).first()
     if existing:
         raise HTTPException(
@@ -55,7 +160,6 @@ def register(user: UserCreateSchema, db: Session = Depends(get_db)):
             detail=f"Username '{user.username}' already exists"
         )
 
-    # Check if email exists
     existing_email = db.query(User).filter(User.email == user.email).first()
     if existing_email:
         raise HTTPException(
@@ -63,7 +167,6 @@ def register(user: UserCreateSchema, db: Session = Depends(get_db)):
             detail=f"Email '{user.email}' already exists"
         )
 
-    # Create user with hashed password
     db_user = User(
         username=user.username,
         email=user.email,
@@ -75,7 +178,6 @@ def register(user: UserCreateSchema, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
 
-    # Invalidate users cache — new user means cached list is stale
     invalidate_cache(USERS_CACHE_KEY)
 
     return {
@@ -99,7 +201,6 @@ def login(
     db: Session = Depends(get_db),
     _=Depends(rate_limit_login)
 ):
-    # Find user
     user = db.query(User).filter(User.username == form_data.username).first()
     if not user:
         raise HTTPException(
@@ -107,21 +208,18 @@ def login(
             detail="Invalid username or password"
         )
 
-    # Verify password
     if not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password"
         )
 
-    # Check if active
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Account is deactivated"
         )
 
-    # Create token
     access_token = create_access_token(data={"sub": user.username})
 
     return {
@@ -129,29 +227,34 @@ def login(
         "token_type": "bearer"
     }
 
-
 # ─── User endpoints (PROTECTED) ──────────────────────────────────────────────
 
 @app.get("/api/v1/users")
 def get_all_users(
     request: Request,
+    page: int = 1,
+    limit: int = 10,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit — 100 requests per minute per user
+    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded. Please wait before making more requests."
         )
 
-    # Check cache first
-    cached = get_cached_data(USERS_CACHE_KEY)
-    if cached:
-        return cached
+    # Cache only works for default page/limit
+    # For paginated requests we skip cache
+    if page == 1 and limit == 10:
+        cached = get_cached_data(USERS_CACHE_KEY)
+        if cached:
+            return cached
 
-    # Cache miss — query database
-    users = db.query(User).filter(User.is_active == True).all()
+    # Query with pagination
+    query = db.query(User).filter(User.is_active == True)
+    users, pagination = paginate(query, page, limit)
+
     response = {
         "message": "Users retrieved successfully",
         "data": [
@@ -166,11 +269,12 @@ def get_all_users(
             }
             for u in users
         ],
-        "count": len(users)
+        "pagination": pagination
     }
 
-    # Store in cache
-    set_cached_data(USERS_CACHE_KEY, response)
+    # Cache only the first page
+    if page == 1 and limit == 10:
+        set_cached_data(USERS_CACHE_KEY, response)
 
     return response
 
@@ -182,11 +286,10 @@ def get_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            detail="Rate limit exceeded."
         )
 
     db_user = db.query(User).filter(User.username == username).first()
@@ -216,11 +319,10 @@ def delete_user(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            detail="Rate limit exceeded."
         )
 
     db_user = db.query(User).filter(User.username == username).first()
@@ -231,12 +333,8 @@ def delete_user(
         )
     db_user.is_active = False
     db.commit()
-
-    # Invalidate cache — user list changed
     invalidate_cache(USERS_CACHE_KEY)
-
     return None
-
 
 # ─── Project endpoints (PROTECTED) ───────────────────────────────────────────
 
@@ -247,11 +345,10 @@ def create_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            detail="Rate limit exceeded."
         )
 
     db_project = Project(
@@ -263,8 +360,6 @@ def create_project(
     db.add(db_project)
     db.commit()
     db.refresh(db_project)
-
-    # Invalidate projects cache — new project added
     invalidate_cache(PROJECTS_CACHE_KEY)
 
     return {
@@ -284,23 +379,25 @@ def create_project(
 @app.get("/api/v1/projects")
 def get_all_projects(
     request: Request,
+    page: int = 1,
+    limit: int = 10,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            detail="Rate limit exceeded."
         )
 
-    # Check cache first
-    cached = get_cached_data(PROJECTS_CACHE_KEY)
-    if cached:
-        return cached
+    if page == 1 and limit == 10:
+        cached = get_cached_data(PROJECTS_CACHE_KEY)
+        if cached:
+            return cached
 
-    # Cache miss — query database
-    projects = db.query(Project).filter(Project.is_active == True).all()
+    query = db.query(Project).filter(Project.is_active == True)
+    projects, pagination = paginate(query, page, limit)
+
     response = {
         "message": "Projects retrieved successfully",
         "data": [
@@ -315,11 +412,11 @@ def get_all_projects(
             }
             for p in projects
         ],
-        "count": len(projects)
+        "pagination": pagination
     }
 
-    # Store in cache
-    set_cached_data(PROJECTS_CACHE_KEY, response)
+    if page == 1 and limit == 10:
+        set_cached_data(PROJECTS_CACHE_KEY, response)
 
     return response
 
@@ -331,11 +428,10 @@ def get_project(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            detail="Rate limit exceeded."
         )
 
     db_project = db.query(Project).filter(Project.id == project_id).first()
@@ -357,7 +453,6 @@ def get_project(
         }
     }
 
-
 # ─── Task endpoints (PROTECTED) ──────────────────────────────────────────────
 
 @app.post("/api/v1/projects/{project_id}/tasks", status_code=status.HTTP_201_CREATED)
@@ -368,11 +463,10 @@ def create_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            detail="Rate limit exceeded."
         )
 
     db_project = db.query(Project).filter(Project.id == project_id).first()
@@ -412,14 +506,15 @@ def create_task(
 def get_project_tasks(
     project_id: int,
     request: Request,
+    page: int = 1,
+    limit: int = 10,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            detail="Rate limit exceeded."
         )
 
     db_project = db.query(Project).filter(Project.id == project_id).first()
@@ -429,7 +524,9 @@ def get_project_tasks(
             detail=f"Project '{project_id}' not found"
         )
 
-    tasks = db.query(Task).filter(Task.project_id == project_id).all()
+    query = db.query(Task).filter(Task.project_id == project_id)
+    tasks, pagination = paginate(query, page, limit)
+
     return {
         "message": "Tasks retrieved successfully",
         "data": [
@@ -445,5 +542,5 @@ def get_project_tasks(
             }
             for t in tasks
         ],
-        "count": len(tasks)
+        "pagination": pagination
     }
