@@ -13,6 +13,15 @@ from src.schemas import (
     TaskCreateSchema,
 )
 
+from src.cache import(
+    get_cached_data,
+    set_cached_data,
+    invalidate_cache,
+    check_redis_connection,
+    USERS_CACHE_KEY,
+    PROJECTS_CACHE_KEY
+)
+
 app = FastAPI(
     title="DevCollab API",
     description="Team collaboration platform built with FastAPI",
@@ -28,7 +37,8 @@ def health_check():
         "status": "healthy",
         "app": "DevCollab API",
         "version": "1.0.0",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "redis": "connected" if check_redis_connection() else "disconnected"
     }
 
 
@@ -63,6 +73,8 @@ def register(user: UserCreateSchema, db: Session = Depends(get_db)):
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+
+    invalidate_cache(USERS_CACHE_KEY)
 
     return {
         "message": "User registered successfully",
@@ -118,8 +130,13 @@ def get_all_users(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    
+    cached = get_cached_data(USERS_CACHE_KEY)
+    if cached:
+        return cached
+
     users = db.query(User).filter(User.is_active == True).all()
-    return {
+    responce = {
         "message": "Users retrieved successfully",
         "data": [
             {
@@ -136,6 +153,9 @@ def get_all_users(
         "count": len(users)
     }
 
+    set_cached_data(USERS_CACHE_KEY, responce)
+
+    return responce
 
 @app.get("/api/v1/users/{username}")
 def get_user(
@@ -177,6 +197,8 @@ def delete_user(
         )
     db_user.is_active = False
     db.commit()
+
+    invalidate_cache(USERS_CACHE_KEY)
     return None
 
 
@@ -197,6 +219,9 @@ def create_project(
     db.add(db_project)
     db.commit()
     db.refresh(db_project)
+
+    invalidate_cache(PROJECTS_CACHE_KEY)
+
     return {
         "message": "Project created successfully",
         "data": {
@@ -216,8 +241,13 @@ def get_all_projects(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    
+    cached = get_cached_data(PROJECTS_CACHE_KEY)
+    if cached:
+        return cached
+
     projects = db.query(Project).filter(Project.is_active == True).all()
-    return {
+    response = {
         "message": "Projects retrieved successfully",
         "data": [
             {
@@ -234,6 +264,8 @@ def get_all_projects(
         "count": len(projects)
     }
 
+    set_cached_data(PROJECTS_CACHE_KEY, response)
+    return response
 
 @app.get("/api/v1/projects/{project_id}")
 def get_project(
