@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     secret_key: str
     debug: bool = False
 
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+
     model_config = {
         "env_file": str(BASE_DIR / ".env"),
         "env_file_encoding": "utf-8"

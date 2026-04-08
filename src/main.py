@@ -1,3 +1,7 @@
+from contextlib import asynccontextmanager
+from src.config.database import get_db, engine, Base
+from sqlalchemy import text
+import asyncio
 from fastapi import FastAPI, HTTPException, status, Depends, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -38,12 +42,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ─── The lifespan function ──────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    max_retries = 10
+    retry_delay = 3
+
+    for attempt in range(max_retries):
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            Base.metadata.create_all(bind=engine)
+            print("Database connection successful. Tables ensured.")
+            break
+        except Exception as e:
+            print(f"Database not ready yet (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                raise
+            await asyncio.sleep(retry_delay)
+
+    yield
+
+
 # ─── App setup ────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="DevCollab API",
     description="Team collaboration platform built with FastAPI",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # ─── CORS middleware ──────────────────────────────────────────────────────────

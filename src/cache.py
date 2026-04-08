@@ -1,16 +1,15 @@
-# src/cache.py
-# Redis caching and rate limiting utilities for DevCollab
-
 import redis
 import json
 from fastapi import HTTPException, status, Request
+from src.config.settings import get_settings
 
+settings = get_settings()
 
 # ─── Redis connection ─────────────────────────────────────────────────────────
 
 redis_client = redis.Redis(
-    host="localhost",
-    port=6379,
+    host=settings.redis_host,
+    port=settings.redis_port,
     db=0,
     decode_responses=True
 )

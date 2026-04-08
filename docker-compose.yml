@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    container_name: devcollab-app
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgre123@db:5432/devcollab
+      SECRET_KEY: devcollab-secret-key-change-in-production
+      DEBUG: "True"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:16
+    container_name: devcollab-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgre123
+      POSTGRES_DB: devcollab
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: devcollab-redis
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
