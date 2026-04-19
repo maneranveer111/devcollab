@@ -20,6 +20,7 @@ from src.schemas import (
     UserCreateSchema,
     ProjectCreateSchema,
     TaskCreateSchema,
+    AssignTaskSchema
 )
 from src.cache import (
     get_cached_data,
@@ -566,6 +567,198 @@ def get_project_tasks(
                 "is_completed": t.is_completed,
                 "project_id": t.project_id,
                 "assigned_to": t.assigned_to,
+                "created_at": t.created_at.isoformat()
+            }
+            for t in tasks
+        ],
+        "pagination": pagination
+    }
+
+
+@app.put("/api/v1/tasks/{task_id}/assign")
+def assign_task(
+    task_id: int,
+    payload: AssignTaskSchema,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded."
+        )
+
+    # Check task exists
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' not found"
+        )
+
+    # Get project
+    db_project = db.query(Project).filter(Project.id == db_task.project_id).first()
+    if not db_project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{db_task.project_id}' not found"
+        )
+
+    # Ownership check (critical)
+    if db_project.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only project owner can assign tasks"
+        )
+
+    # Check user exists
+    db_user = db.query(User).filter(User.username == payload.username).first()
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{payload.username}' not found"
+        )
+
+    # Prevent assigning to inactive user
+    if not db_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot assign task to inactive user"
+        )
+
+    # Prevent duplicate assignment
+    if db_task.assigned_to == db_user.id:
+        return {
+            "message": "Task already assigned to this user",
+            "data": {
+                "task_id": db_task.id,
+                "assigned_to": db_user.username
+            }
+        }
+
+    # Assign task
+    db_task.assigned_to = db_user.id
+    db.commit()
+    db.refresh(db_task)
+
+    return {
+        "message": "Task assigned successfully",
+        "data": {
+            "task_id": db_task.id,
+            "assigned_to": db_user.username
+        }
+    }
+
+
+@app.put("/api/v1/tasks/{task_id}/complete")
+def complete_task(
+    task_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded."
+        )
+
+    # Check task exists
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' not found"
+        )
+
+    # Get project
+    db_project = db.query(Project).filter(Project.id == db_task.project_id).first()
+    if not db_project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{db_task.project_id}' not found"
+        )
+
+    # Authorization check
+    is_owner = db_project.owner_id == current_user.id
+    is_assignee = db_task.assigned_to == current_user.id
+
+    if not (is_owner or is_assignee):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only assigned user or project owner can complete task"
+        )
+
+    # Prevent re-completing
+    if db_task.is_completed:
+        return {
+            "message": "Task already completed",
+            "data": {
+                "task_id": db_task.id,
+                "is_completed": True
+            }
+        }
+
+    # Mark complete
+    db_task.is_completed = True
+    db.commit()
+    db.refresh(db_task)
+
+    return {
+        "message": "Task marked as completed",
+        "data": {
+            "task_id": db_task.id,
+            "is_completed": db_task.is_completed
+        }
+    }
+
+
+@app.get("/api/v1/users/{username}/tasks")
+def get_user_tasks(
+    username: str,
+    request: Request,
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded."
+        )
+
+    # Check user exists
+    db_user = db.query(User).filter(User.username == username).first()
+    if not db_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User '{username}' not found"
+        )
+
+    # Query tasks assigned to user
+    query = db.query(Task).filter(Task.assigned_to == db_user.id)
+
+    tasks, pagination = paginate(query, page, limit)
+
+    return {
+        "message": "User tasks retrieved successfully",
+        "data": [
+            {
+                "id": t.id,
+                "title": t.title,
+                "description": t.description,
+                "priority": t.priority,
+                "is_completed": t.is_completed,
+                "project": {
+                    "id" : t.project.id,
+                    "name" : t.project.name
+                },
+                "assigned_to": db_user.username,
                 "created_at": t.created_at.isoformat()
             }
             for t in tasks

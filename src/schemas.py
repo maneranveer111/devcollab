@@ -33,7 +33,7 @@ class ProjectCreateSchema(BaseModel):
 class TaskCreateSchema(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     description: Optional[str] = None
-    assigned_to: Optional[str] = None
+    # assigned_to: Optional[str] = None
     priority: str = Field(default="medium")
 
     @field_validator("priority")
@@ -77,6 +77,16 @@ class TaskResponseSchema(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+class AssignTaskSchema(BaseModel):
+    username: str = Field(min_length=3, max_length=30)
+
+    @field_validator("username")
+    @classmethod
+    def username_must_be_valid(cls, value: str) -> str:
+        if not value.replace("_", "").isalnum():
+            raise ValueError("Username can only contain letters, numbers, underscores")
+        return value.lower()
 
 if __name__ == "__main__":
     print("=== Test 1: Valid user ===")
