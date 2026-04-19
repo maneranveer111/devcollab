@@ -44,7 +44,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── The lifespan function ──────────────────────────────────────────────────────────
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     max_retries = 10
@@ -54,9 +53,10 @@ async def lifespan(app: FastAPI):
         try:
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
-            Base.metadata.create_all(bind=engine)
-            print("Database connection successful. Tables ensured.")
+
+            print("Database connection successful.")
             break
+
         except Exception as e:
             print(f"Database not ready yet (attempt {attempt + 1}/{max_retries}): {e}")
             if attempt == max_retries - 1:
