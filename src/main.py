@@ -452,6 +452,32 @@ def get_all_projects(
     return response
 
 
+@app.get("/api/v1/projects/search")
+def search_projects(
+    search: str,
+    request: Request,
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not check_rate_limit(f"api:{current_user.username}", 100, 60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    query = db.query(Project).filter(
+        Project.name.ilike(f"%{search}%") |
+        Project.description.ilike(f"%{search}%")
+    )
+
+    projects, pagination = paginate(query, page, limit)
+
+    return {
+        "message": "Search results",
+        "data": projects,
+        "pagination": pagination
+    }
+
+
 @app.get("/api/v1/projects/{project_id}")
 def get_project(
     project_id: int,
@@ -546,6 +572,60 @@ def delete_project(
     db.commit()
 
     return {"message": "Project deleted successfully"}
+
+
+@app.get("/api/v1/projects/{project_id}/tasks")
+def get_project_tasks(
+    project_id: int,
+    request: Request,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", 100, 60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Check project
+    db_project = db.query(Project).filter(Project.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    query = db.query(Task).filter(Task.project_id == project_id)
+
+    # 🔥 FILTER: status
+    if status:
+        if status.lower() == "completed":
+            query = query.filter(Task.is_completed == True)
+        elif status.lower() == "pending":
+            query = query.filter(Task.is_completed == False)
+
+    # 🔥 FILTER: priority
+    if priority:
+        query = query.filter(Task.priority == priority.lower())
+
+    tasks, pagination = paginate(query, page, limit)
+
+    return {
+        "message": "Tasks retrieved successfully",
+        "data": [
+            {
+                "id": t.id,
+                "title": t.title,
+                "priority": t.priority,
+                "is_completed": t.is_completed,
+                "assigned_to": t.assigned_to,
+                "created_at": t.created_at.isoformat()
+            }
+            for t in tasks
+        ],
+        "pagination": pagination
+    }
+
+
 
 
 # ─── Task endpoints (PROTECTED) ──────────────────────────────────────────────
@@ -870,3 +950,40 @@ def update_task(
     db.refresh(db_task)
 
     return {"message": "Task updated successfully", "data": db_task}
+
+
+@app.get("/api/v1/tasks/search")
+def search_tasks(
+    search: str,
+    request: Request,
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", 100, 60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    query = db.query(Task).filter(
+        Task.title.ilike(f"%{search}%") |
+        Task.description.ilike(f"%{search}%")
+    )
+
+    tasks, pagination = paginate(query, page, limit)
+
+    return {
+        "message": "Search results",
+        "data": [
+            {
+                "id": t.id,
+                "title": t.title,
+                "priority": t.priority,
+                "is_completed": t.is_completed,
+                "project_id": t.project_id,
+                "created_at": t.created_at.isoformat()
+            }
+            for t in tasks
+        ],
+        "pagination": pagination
+    }
