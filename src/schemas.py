@@ -88,6 +88,17 @@ class AssignTaskSchema(BaseModel):
             raise ValueError("Username can only contain letters, numbers, underscores")
         return value.lower()
 
+class ProjectUpdateSchema(BaseModel):
+    name:  Optional[str] = Field(default=None, min_length=2, max_length=100)
+    description: Optional[str] = Field(default=None, max_length=500)
+    max_members: Optional[int] = Field(default=None, ge=1, le=100)
+
+    
+class TaskUpdateSchema(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=2, max_length=200)
+    description: Optional[str] = None
+    priority: Optional[str] = None
+
 if __name__ == "__main__":
     print("=== Test 1: Valid user ===")
     valid_user = UserCreateSchema(
@@ -137,3 +148,4 @@ if __name__ == "__main__":
     )
     print(project)
     print(f"As dict: {project.model_dump()}")
+

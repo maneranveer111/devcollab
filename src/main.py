@@ -20,7 +20,9 @@ from src.schemas import (
     UserCreateSchema,
     ProjectCreateSchema,
     TaskCreateSchema,
-    AssignTaskSchema
+    AssignTaskSchema,
+    ProjectUpdateSchema,
+    TaskUpdateSchema
 )
 from src.cache import (
     get_cached_data,
@@ -482,6 +484,70 @@ def get_project(
         }
     }
 
+
+
+@app.put("/api/v1/projects/{project_id}")
+def update_project(
+    project_id: int,
+    payload: ProjectUpdateSchema,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Rate limit
+    if not check_rate_limit(f"api:{current_user.username}", 100, 60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Get project
+    db_project = db.query(Project).filter(Project.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Ownership check
+    if db_project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only owner can update project")
+
+    # Update fields
+    if payload.name is not None:
+        db_project.name = payload.name
+    if payload.description is not None:
+        db_project.description = payload.description
+    if payload.max_members is not None:
+        db_project.max_members = payload.max_members
+
+    db.commit()
+    db.refresh(db_project)
+
+    return {
+        "message": "Project updated successfully",
+        "data": db_project
+    }
+
+
+@app.delete("/api/v1/projects/{project_id}")
+def delete_project(
+    project_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not check_rate_limit(f"api:{current_user.username}", 100, 60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    db_project = db.query(Project).filter(Project.id == project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if db_project.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only owner can delete project")
+
+    # Soft delete
+    db_project.is_active = False
+    db.commit()
+
+    return {"message": "Project deleted successfully"}
+
+
 # ─── Task endpoints (PROTECTED) ──────────────────────────────────────────────
 
 @app.post("/api/v1/projects/{project_id}/tasks", status_code=status.HTTP_201_CREATED)
@@ -765,3 +831,42 @@ def get_user_tasks(
         ],
         "pagination": pagination
     }
+
+
+@app.put("/api/v1/tasks/{task_id}")
+def update_task(
+    task_id: int,
+    payload: TaskUpdateSchema,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if not check_rate_limit(f"api:{current_user.username}", 100, 60):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    db_task = db.query(Task).filter(Task.id == task_id).first()
+    if not db_task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Only owner OR assigned user
+    db_project = db.query(Project).filter(Project.id == db_task.project_id).first()
+    if not db_project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not (
+        db_project.owner_id == current_user.id or
+        db_task.assigned_to == current_user.id
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    if payload.title:
+        db_task.title = payload.title
+    if payload.description:
+        db_task.description = payload.description
+    if payload.priority:
+        db_task.priority = payload.priority
+
+    db.commit()
+    db.refresh(db_task)
+
+    return {"message": "Task updated successfully", "data": db_task}
