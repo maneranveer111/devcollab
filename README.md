@@ -1,199 +1,173 @@
-# 🚀 DevCollab Backend API
-
-A production-style backend system built with **FastAPI**, demonstrating real-world backend engineering concepts like authentication, caching, rate limiting, Dockerization, and automated testing.
-
----
-
-## 📌 Overview
-
-DevCollab is a backend API that simulates a collaboration platform.
-It is designed to showcase **scalable, secure, and testable backend architecture** using modern technologies.
+🚀 DevCollab — Backend API for Team Collaboration
+A production-ready backend system for managing users, projects, and tasks, built with modern backend technologies and real-world architecture patterns.
 
 ---
-
-## 🏗️ Tech Stack
-
-| Layer                   | Technology              |
-| ----------------------- | ----------------------- |
-| Backend Framework       | FastAPI                 |
-| Database                | PostgreSQL              |
-| ORM                     | SQLAlchemy              |
-| Authentication          | JWT (OAuth2)            |
-| Caching & Rate Limiting | Redis                   |
-| Testing                 | pytest                  |
-| Containerization        | Docker + Docker Compose |
-
+📌 Overview
+DevCollab is a backend service that enables teams to:
+Manage users and authentication
+Create and manage projects
+Assign and track tasks
+Enforce access control with authorization
+Search and filter data efficiently
+The focus is on clean architecture, scalability, and real backend engineering practices.
 ---
 
-## 📁 Project Structure
+🛠 Tech Stack
+Layer	Technology
+Backend	FastAPI
+Database	PostgreSQL
+ORM	SQLAlchemy
+Migrations	Alembic
+Caching & Rate Limiting	Redis
+Authentication	JWT (OAuth2)
+Containerization	Docker (optional)
+---
 
-```text
-devcollab/
-│
-├── src/
-│   ├── main.py              # FastAPI entry point
-│   ├── db_models.py        # Database models (SQLAlchemy)
-│   ├── schemas.py          # Pydantic schemas
-│   ├── auth.py             # JWT authentication logic
-│   ├── cache.py            # Redis caching & rate limiting
-│   ├── utils.py            # Helper functions (pagination)
-│   ├── models.py           # Core logic
-│   ├── config/             # Configuration settings
-│   └── db_demo.py          # DB practice/demo script
-│
-├── tests/
-│   ├── conftest.py         # Test DB setup & fixtures
-│   ├── test_auth.py        # Auth & protected route tests
-│   ├── test_utils.py       # Unit tests
-│   ├── test_health.py      # API tests
-│   ├── test_errors.py      # Validation & error tests
-│   └── test_basic.py       # Basic pytest checks
-│
-├── logs/                   # Application logs
-├── docs/                   # Documentation (if any)
-│
-├── Dockerfile              # App container config
-├── docker-compose.yml      # Multi-service setup
-├── requirements.txt
-├── pytest.ini
-├── .env                    # Environment variables
-├── test.db                 # Test database (SQLite)
-└── README.md
+✨ Features
+🔐 Authentication & Users
+User registration & login (JWT-based)
+Secure password handling
+Role system: `ADMIN`, `MEMBER`, `VIEWER`
+Soft delete users (`is_active` flag)
+
+📁 Projects
+Create project
+Get all projects (pagination supported)
+Get project by ID
+Update project
+Soft delete project
+
+📋 Tasks
+Create tasks under projects
+Assign tasks to users
+Mark tasks as complete
+Update task details
+Get tasks per project
+
+🔄 Task Lifecycle
 ```
+Create → Assign → Complete → Track
+```
+🔎 Filtering & Search
+Filter tasks by:
+Status: `completed`, `pending`
+Priority: `low`, `medium`, `high`, `critical`
+Search tasks by title or description
+Search projects by name or description
+
+📊 Pagination
+All list APIs support pagination
+Consistent API responses
+
+🔐 Authorization
+Only the project owner can:
+Assign tasks
+Update / delete the project
+Only the assigned user or owner can:
+Complete a task
+⚡ Performance
+Redis-based rate limiting
+Optimized queries using SQLAlchemy
+Clean and modular structure
+🧱 Database Management
+Alembic migrations for schema versioning
+No runtime `create_all` (production practice)
 
 ---
-
-## ⚙️ Features
-
-### 🔐 Authentication
-
-* JWT-based authentication system
-* Secure password hashing
-* Protected API routes
-
+📂 Project Structure
+```
+devcollab/
+│── src/
+│   ├── config/        # DB and settings
+│   ├── db_models.py   # SQLAlchemy models
+│   ├── schemas.py     # Pydantic schemas
+│   ├── main.py        # FastAPI app
+│
+│── alembic/           # Database migrations
+│── scripts/           # Utility scripts (optional)
+│── tests/             # Test cases (optional)
+│── .env.example       # Environment template
+│── docker-compose.yml
+│── README.md
+```
 ---
-
-### 📊 API Design
-
-* RESTful API structure
-* Proper HTTP status codes
-* Standardized error responses
-
----
-
-### ⚡ Performance Optimization
-
-* Redis caching for frequently accessed data
-* Rate limiting to prevent abuse
-* Pagination for efficient data handling
-
----
-
-### 🧠 System Design Concepts Applied
-
-* Stateless architecture (JWT-based auth)
-* Separation of concerns
-* Dependency injection
-* Cache-first approach
-
----
-
-### 🧪 Testing
-
-* Unit tests for helper functions
-* API testing using FastAPI TestClient
-* Authentication flow testing (register, login, protected routes)
-* Validation and error handling tests
-* Isolated test database using pytest fixtures
-
----
-
-### 🐳 Docker Support
-
-* Multi-container architecture:
-
-  * FastAPI app
-  * PostgreSQL
-  * Redis
-* Entire system runs with a single command
-
----
-
-## 🚀 Getting Started
-
-### 1️⃣ Clone the Repository
-
+⚙️ Setup Instructions
+1️⃣ Clone Repository
 ```bash
-git clone https://github.com/maneranveer111/devcollab.git
+git clone https://github.com/maneranveer111/devcollab
 cd devcollab
 ```
-
----
-
-### 2️⃣ Setup Environment Variables
-
+2️⃣ Create Virtual Environment
+```bash
+python -m venv .venv
+source .venv/Scripts/activate   # Windows
+```
+3️⃣ Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+4️⃣ Setup Environment Variables
 Create a `.env` file:
-
 ```env
-DATABASE_URL=postgresql://user:password@db/devcollab
+DATABASE_URL=postgresql://user:password@localhost/devcollab
 SECRET_KEY=your_secret_key
-REDIS_HOST=redis
+REDIS_HOST=localhost
 ```
-
----
-
-### 3️⃣ Run with Docker
-
+5️⃣ Run Migrations
 ```bash
-docker compose up --build
+alembic upgrade head
 ```
-
----
-
-### 4️⃣ Access API
-
-* Swagger Docs → http://localhost:8000/docs
-* Base URL → http://localhost:8000
-
----
-
-## 🧪 Running Tests
-
+6️⃣ Start Server
 ```bash
-pytest
+uvicorn src.main:app --reload
 ```
+7️⃣ Open API Docs
+```
+http://127.0.0.1:8000/docs
+```
+---
+🧪 API Examples
+🔐 Login
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/auth/login" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=ranveer&password=password123"
+```
+🔎 Search Tasks
+```bash
+curl "http://127.0.0.1:8000/api/v1/tasks/search?search=bug" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+🔍 Filter Tasks
+```bash
+curl "http://127.0.0.1:8000/api/v1/projects/1/tasks?status=completed&priority=high" \
+  -H "Authorization: Bearer <TOKEN>"
+```
+---
+🧠 Key Backend Concepts Implemented
+RESTful API design
+JWT Authentication & Authorization
+Role-based access control (basic)
+Database migrations (Alembic)
+Pagination, filtering, and search
+Rate limiting with Redis
+Clean architecture & modular design
 
 ---
-
-## 📈 Example API Endpoints
-
-| Method | Endpoint              | Description           |
-| ------ | --------------------- | --------------------- |
-| POST   | /api/v1/auth/register | Register user         |
-| POST   | /api/v1/auth/login    | Login user            |
-| GET    | /api/v1/users         | Get users (protected) |
-| GET    | /health               | Health check          |
+📈 Project Highlights
+Production-style DB handling (no `create_all`)
+Clean and consistent API responses
+Real-world business logic (task lifecycle)
+Secure and structured backend design
 
 ---
-
-## ⚠️ Important Notes
-
-* PostgreSQL is the **primary data source**
-* Redis is used for **caching and rate limiting**
-* Authentication is **stateless using JWT**
-* Pagination prevents large data responses
-* Tests use an **isolated SQLite test database (`test.db`)**
+🚀 Future Improvements
+Project member management
+Advanced role-based access control (RBAC)
+Activity logs
+Notifications system
 
 ---
-
-## 👨‍💻 Author
-
-Backend system built as part of a structured learning journey focused on **real-world backend development and system design**.
-
----
-
-## ⭐ Summary
-
-This project demonstrates:
-
-> Building a scalable backend system with authentication, caching, testing, and containerization using real-world engineering practices.
+👨‍💻 Author
+Ranveer Mane
+GitHub: https://github.com/maneranveer111

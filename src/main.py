@@ -596,14 +596,14 @@ def get_project_tasks(
 
     query = db.query(Task).filter(Task.project_id == project_id)
 
-    # 🔥 FILTER: status
+    # FILTER: status
     if status:
         if status.lower() == "completed":
             query = query.filter(Task.is_completed == True)
         elif status.lower() == "pending":
             query = query.filter(Task.is_completed == False)
 
-    # 🔥 FILTER: priority
+    # FILTER: priority
     if priority:
         query = query.filter(Task.priority == priority.lower())
 
