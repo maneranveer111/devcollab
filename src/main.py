@@ -262,28 +262,33 @@ def login(
 
 @app.get("/api/v1/users")
 def get_all_users(
-    request: Request,
     page: int = 1,
     limit: int = 10,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Admin only
+    if current_user.role.value != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only admin can view all users"
+        )
+
     # Rate limit
     if not check_rate_limit(f"api:{current_user.username}", limit=100, window_seconds=60):
         raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded. Please wait before making more requests."
+            status_code=429,
+            detail="Rate limit exceeded"
         )
 
-    # Cache only works for default page/limit
-    # For paginated requests we skip cache
+    cache_key = f"users:page:{page}:limit:{limit}"
+
     if page == 1 and limit == 10:
-        cached = get_cached_data(USERS_CACHE_KEY)
+        cached = get_cached_data(cache_key)
         if cached:
             return cached
 
-    # Query with pagination
-    query = db.query(User).filter(User.is_active == True)
+    query = db.query(User).filter(User.is_active == True).order_by(User.id)
     users, pagination = paginate(query, page, limit)
 
     response = {
@@ -303,9 +308,8 @@ def get_all_users(
         "pagination": pagination
     }
 
-    # Cache only the first page
     if page == 1 and limit == 10:
-        set_cached_data(USERS_CACHE_KEY, response)
+        set_cached_data(cache_key, response)
 
     return response
 
